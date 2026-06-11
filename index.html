@@ -288,7 +288,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script>
-const VERSION = 'v1.6';
+const VERSION = 'v1.7';
 document.getElementById('version-badge').textContent = VERSION;
 
 let stream = null, animId = null;
@@ -404,39 +404,29 @@ async function scanLoop() {
     }
     scanCtx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, sw, sh);
 
-    // ビデオ空間 → 表示空間への変換（BarcodeDetector 用）
-    const toDisplay = p => ({
-      x: (p.x - cropX) * scale,
-      y: (p.y - cropY) * scale
-    });
+    // フレームを5領域に分割して jsQR を実行し、複数QRを検出
+    const regions = [
+      { x: 0,              y: 0,              w: sw,              h: sh              }, // 全体
+      { x: 0,              y: 0,              w: Math.ceil(sw*.6), h: Math.ceil(sh*.6) }, // 左上
+      { x: Math.floor(sw*.4), y: 0,           w: Math.ceil(sw*.6), h: Math.ceil(sh*.6) }, // 右上
+      { x: 0,              y: Math.floor(sh*.4), w: Math.ceil(sw*.6), h: Math.ceil(sh*.6) }, // 左下
+      { x: Math.floor(sw*.4), y: Math.floor(sh*.4), w: Math.ceil(sw*.6), h: Math.ceil(sh*.6) }, // 右下
+    ];
 
-    let codes = [];
-
-    // BarcodeDetector: video 要素を直接渡して複数同時検出
-    if (detector) {
-      try {
-        const results = await detector.detect(video);
-        if (results.length > 0) {
-          codes = results.map(r => ({
-            data: r.rawValue,
-            points: r.cornerPoints.map(toDisplay)
-          }));
-        }
-      } catch(e) {}
-    }
-
-    // BarcodeDetector が使えない or 0件なら jsQR フォールバック（1件）
-    if (codes.length === 0) {
-      const imgData = scanCtx.getImageData(0, 0, sw, sh);
-      const raw = jsQR(imgData.data, sw, sh, { inversionAttempts: 'dontInvert' });
-      if (raw) {
-        const s = p => ({ x: p.x * 2, y: p.y * 2 });
-        codes = [{ data: raw.data, points: [
+    const found = new Map();
+    for (const r of regions) {
+      const imgData = scanCtx.getImageData(r.x, r.y, r.w, r.h);
+      const raw = jsQR(imgData.data, r.w, r.h, { inversionAttempts: 'dontInvert' });
+      if (raw && !found.has(raw.data)) {
+        // 領域オフセット → scanCanvas 空間 → 表示空間（×2）
+        const s = p => ({ x: (p.x + r.x) * 2, y: (p.y + r.y) * 2 });
+        found.set(raw.data, { data: raw.data, points: [
           s(raw.location.topLeftCorner), s(raw.location.topRightCorner),
           s(raw.location.bottomRightCorner), s(raw.location.bottomLeftCorner)
-        ]}];
+        ]});
       }
     }
+    let codes = Array.from(found.values());
 
     ctx.clearRect(0, 0, dw, dh);
     for (const code of codes) {
