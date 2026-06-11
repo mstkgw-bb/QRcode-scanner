@@ -288,7 +288,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script>
-const VERSION = 'v1.5';
+const VERSION = 'v1.6';
 document.getElementById('version-badge').textContent = VERSION;
 
 let stream = null, animId = null;
@@ -404,29 +404,39 @@ async function scanLoop() {
     }
     scanCtx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, sw, sh);
 
-    // QRコード検出（複数対応）
+    // ビデオ空間 → 表示空間への変換（BarcodeDetector 用）
+    const toDisplay = p => ({
+      x: (p.x - cropX) * scale,
+      y: (p.y - cropY) * scale
+    });
+
     let codes = [];
-    try {
-      if (detector) {
-        // BarcodeDetector: 複数QRを同時検出、座標は scanCanvas 空間
-        const results = await detector.detect(scanCanvas);
-        codes = results.map(r => ({
-          data: r.rawValue,
-          points: r.cornerPoints.map(p => ({ x: p.x * 2, y: p.y * 2 }))
-        }));
-      } else {
-        // jsQR フォールバック: 1件のみ
-        const imgData = scanCtx.getImageData(0, 0, sw, sh);
-        const raw = jsQR(imgData.data, sw, sh, { inversionAttempts: 'dontInvert' });
-        if (raw) {
-          const s = p => ({ x: p.x * 2, y: p.y * 2 });
-          codes = [{ data: raw.data, points: [
-            s(raw.location.topLeftCorner), s(raw.location.topRightCorner),
-            s(raw.location.bottomRightCorner), s(raw.location.bottomLeftCorner)
-          ]}];
+
+    // BarcodeDetector: video 要素を直接渡して複数同時検出
+    if (detector) {
+      try {
+        const results = await detector.detect(video);
+        if (results.length > 0) {
+          codes = results.map(r => ({
+            data: r.rawValue,
+            points: r.cornerPoints.map(toDisplay)
+          }));
         }
+      } catch(e) {}
+    }
+
+    // BarcodeDetector が使えない or 0件なら jsQR フォールバック（1件）
+    if (codes.length === 0) {
+      const imgData = scanCtx.getImageData(0, 0, sw, sh);
+      const raw = jsQR(imgData.data, sw, sh, { inversionAttempts: 'dontInvert' });
+      if (raw) {
+        const s = p => ({ x: p.x * 2, y: p.y * 2 });
+        codes = [{ data: raw.data, points: [
+          s(raw.location.topLeftCorner), s(raw.location.topRightCorner),
+          s(raw.location.bottomRightCorner), s(raw.location.bottomLeftCorner)
+        ]}];
       }
-    } catch(e) {}
+    }
 
     ctx.clearRect(0, 0, dw, dh);
     for (const code of codes) {
