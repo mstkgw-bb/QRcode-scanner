@@ -140,6 +140,59 @@
   .guide-corner.tr{top:-2px;right:-2px;border-width:3px 3px 0 0;border-radius:0 4px 0 0}
   .guide-corner.bl{bottom:-2px;left:-2px;border-width:0 0 3px 3px;border-radius:0 0 0 4px}
   .guide-corner.br{bottom:-2px;right:-2px;border-width:0 3px 3px 0;border-radius:0 0 4px 0}
+
+  /* ── フルスクリーンカメラ ── */
+  #cam-wrap.fullscreen{
+    position:fixed;inset:0;z-index:100;
+    aspect-ratio:unset;border-radius:0;
+  }
+  body.cam-open{overflow:hidden}
+
+  #fs-bar{
+    display:none;position:absolute;inset:0;
+    flex-direction:column;justify-content:space-between;
+    pointer-events:none;
+  }
+  #cam-wrap.fullscreen #fs-bar{display:flex}
+
+  #fs-status{
+    pointer-events:none;
+    margin:16px;
+    margin-top:max(16px, calc(env(safe-area-inset-top) + 8px));
+    background:rgba(0,0,0,0.55);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    border-radius:var(--radius-sm);padding:10px 12px;
+    display:flex;align-items:center;gap:8px;
+    font-size:13px;color:#fff;
+  }
+  #fs-status.found{background:rgba(15,110,86,0.88)}
+  #fs-dot{
+    width:8px;height:8px;border-radius:50%;
+    background:rgba(255,255,255,0.4);flex-shrink:0;transition:background .3s;
+  }
+  #fs-status.found #fs-dot{background:#4DEDA0;box-shadow:0 0 0 3px rgba(77,237,160,0.3)}
+  #fs-status.scanning #fs-dot{background:#8ED446;animation:pulse 1.5s infinite}
+
+  #fs-btns{
+    pointer-events:auto;display:flex;gap:8px;
+    padding:16px;
+    padding-bottom:max(16px, calc(env(safe-area-inset-bottom) + 8px));
+  }
+  #fs-stop-btn{
+    flex:1;height:50px;border-radius:var(--radius);
+    background:rgba(255,255,255,0.15);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    color:#fff;border:0.5px solid rgba(255,255,255,0.25);
+    font-size:15px;font-weight:500;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;gap:7px;
+  }
+  #fs-stop-btn:active{background:rgba(255,255,255,0.28)}
+  #fs-clear-btn{
+    height:50px;padding:0 18px;border-radius:var(--radius);
+    background:rgba(255,255,255,0.08);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    color:rgba(255,255,255,0.65);border:0.5px solid rgba(255,255,255,0.15);
+    font-size:13px;cursor:pointer;
+    display:flex;align-items:center;gap:6px;
+  }
+  #fs-clear-btn:active{background:rgba(255,255,255,0.18)}
 </style>
 </head>
 <body>
@@ -184,6 +237,22 @@
           <div class="guide-corner tr"></div>
           <div class="guide-corner bl"></div>
           <div class="guide-corner br"></div>
+        </div>
+      </div>
+      <div id="fs-bar">
+        <div id="fs-status">
+          <div id="fs-dot"></div>
+          <span id="fs-text">スキャン中...</span>
+        </div>
+        <div id="fs-btns">
+          <button id="fs-stop-btn" onclick="stopCamera()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+            停止
+          </button>
+          <button id="fs-clear-btn" onclick="clearAll()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+            リセット
+          </button>
         </div>
       </div>
     </div>
@@ -280,6 +349,8 @@ async function startCamera() {
     document.getElementById('scan-guide').style.display = 'flex';
     document.getElementById('start-btn').style.display = 'none';
     document.getElementById('stop-btn').style.display = '';
+    document.getElementById('cam-wrap').classList.add('fullscreen');
+    document.body.classList.add('cam-open');
     setStatus(targets.size > 0 ? 'スキャン中... ' + targets.size + '件の試薬を検索しています' : 'QRコードをスキャン中...', 'scanning');
     scanLoop();
   } catch(e) {
@@ -298,6 +369,8 @@ function stopCamera() {
   document.getElementById('scan-guide').style.display = 'none';
   document.getElementById('start-btn').style.display = '';
   document.getElementById('stop-btn').style.display = 'none';
+  document.getElementById('cam-wrap').classList.remove('fullscreen');
+  document.body.classList.remove('cam-open');
   setStatus('停止しました', '');
 }
 
@@ -442,6 +515,9 @@ function setStatus(msg, type) {
   const bar = document.getElementById('status-bar');
   bar.className = type ? type : '';
   document.getElementById('status-text').textContent = msg;
+  const fs = document.getElementById('fs-status');
+  fs.className = type ? type : '';
+  document.getElementById('fs-text').textContent = msg;
 }
 
 function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
