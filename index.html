@@ -218,10 +218,15 @@ let stream = null, animId = null;
 let targets = new Set();
 let history = new Map();
 let lastFoundCode = null;
+let lastScanTime = 0;
+const SCAN_INTERVAL = 80; // ms — ~12fps で十分
 
 const video = document.getElementById('video');
 const overlayCanvas = document.getElementById('overlay');
 const ctx = overlayCanvas.getContext('2d');
+// スキャン用の小さなオフスクリーンキャンバスを使い回す
+const scanCanvas = document.createElement('canvas');
+const scanCtx = scanCanvas.getContext('2d');
 
 function addTarget() {
   const val = document.getElementById('target-input').value.trim();
@@ -267,7 +272,7 @@ async function startCamera() {
   if (stream) return;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } }
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 960 } }
     });
     video.srcObject = stream;
     await video.play();
@@ -298,14 +303,23 @@ function stopCamera() {
 
 function scanLoop() {
   if (!stream) return;
-  if (video.readyState === video.HAVE_ENOUGH_DATA) {
+  const now = performance.now();
+  if (video.readyState === video.HAVE_ENOUGH_DATA && now - lastScanTime >= SCAN_INTERVAL) {
+    lastScanTime = now;
     const w = video.videoWidth, h = video.videoHeight;
-    overlayCanvas.width = w; overlayCanvas.height = h;
-    const tmp = document.createElement('canvas');
-    tmp.width = w; tmp.height = h;
-    tmp.getContext('2d').drawImage(video, 0, 0, w, h);
-    const imgData = tmp.getContext('2d').getImageData(0, 0, w, h);
-    const code = jsQR(imgData.data, w, h, { inversionAttempts: 'dontInvert' });
+    if (overlayCanvas.width !== w || overlayCanvas.height !== h) {
+      overlayCanvas.width = w; overlayCanvas.height = h;
+    }
+    // スキャンは半分の解像度で行い負荷を下げる
+    const sw = w >> 1, sh = h >> 1;
+    if (scanCanvas.width !== sw || scanCanvas.height !== sh) {
+      scanCanvas.width = sw; scanCanvas.height = sh;
+    }
+    scanCtx.drawImage(video, 0, 0, sw, sh);
+    const imgData = scanCtx.getImageData(0, 0, sw, sh);
+    // jsQR に渡す座標は半分スケールなので描画時に2倍して戻す
+    const rawCode = jsQR(imgData.data, sw, sh, { inversionAttempts: 'dontInvert' });
+    const code = rawCode ? scaledCode(rawCode, 2) : null;
     ctx.clearRect(0, 0, w, h);
 
     if (code) {
@@ -330,6 +344,19 @@ function scanLoop() {
     }
   }
   animId = requestAnimationFrame(scanLoop);
+}
+
+function scaledCode(code, scale) {
+  const s = p => ({ x: p.x * scale, y: p.y * scale });
+  return {
+    data: code.data,
+    location: {
+      topLeftCorner: s(code.location.topLeftCorner),
+      topRightCorner: s(code.location.topRightCorner),
+      bottomRightCorner: s(code.location.bottomRightCorner),
+      bottomLeftCorner: s(code.location.bottomLeftCorner),
+    }
+  };
 }
 
 function drawQRHighlight(loc, data, isTarget, w) {
