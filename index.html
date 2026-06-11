@@ -306,25 +306,34 @@ function scanLoop() {
   const now = performance.now();
   if (video.readyState === video.HAVE_ENOUGH_DATA && now - lastScanTime >= SCAN_INTERVAL) {
     lastScanTime = now;
-    const w = video.videoWidth, h = video.videoHeight;
-    if (overlayCanvas.width !== w || overlayCanvas.height !== h) {
-      overlayCanvas.width = w; overlayCanvas.height = h;
+
+    // canvas の内部サイズ = 表示サイズ（CSS px）に合わせる
+    const dw = video.clientWidth, dh = video.clientHeight;
+    if (overlayCanvas.width !== dw || overlayCanvas.height !== dh) {
+      overlayCanvas.width = dw; overlayCanvas.height = dh;
     }
-    // スキャンは半分の解像度で行い負荷を下げる
-    const sw = w >> 1, sh = h >> 1;
+
+    // object-fit:cover と同じクロップ領域をネイティブ解像度で計算
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const scale = Math.max(dw / vw, dh / vh);
+    const cropW = dw / scale, cropH = dh / scale;
+    const cropX = (vw - cropW) / 2, cropY = (vh - cropH) / 2;
+
+    // クロップ済み映像をスキャン用キャンバス（半サイズ）に描画
+    const sw = dw >> 1, sh = dh >> 1;
     if (scanCanvas.width !== sw || scanCanvas.height !== sh) {
       scanCanvas.width = sw; scanCanvas.height = sh;
     }
-    scanCtx.drawImage(video, 0, 0, sw, sh);
+    scanCtx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, sw, sh);
     const imgData = scanCtx.getImageData(0, 0, sw, sh);
-    // jsQR に渡す座標は半分スケールなので描画時に2倍して戻す
+    // jsQR 座標は sw×sh 空間 → 2倍して dw×dh（表示）空間に変換
     const rawCode = jsQR(imgData.data, sw, sh, { inversionAttempts: 'dontInvert' });
     const code = rawCode ? scaledCode(rawCode, 2) : null;
-    ctx.clearRect(0, 0, w, h);
+    ctx.clearRect(0, 0, dw, dh);
 
     if (code) {
       const isTarget = targets.size === 0 || targets.has(code.data);
-      drawQRHighlight(code.location, code.data, isTarget, w);
+      drawQRHighlight(code.location, code.data, isTarget, dw);
       if (isTarget && code.data !== lastFoundCode) {
         lastFoundCode = code.data;
         addHistory(code.data, true);
