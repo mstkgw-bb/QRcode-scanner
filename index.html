@@ -287,14 +287,18 @@ let stream = null, animId = null;
 let targets = new Set();
 let history = new Map();
 let lastFoundCode = null;
-const SCAN_INTERVAL = 250; // ms — ~4fps、rAF→setTimeoutでループ自体を低頻度に
+const SCAN_INTERVAL = 250;
 
 const video = document.getElementById('video');
 const overlayCanvas = document.getElementById('overlay');
 const ctx = overlayCanvas.getContext('2d');
-// スキャン用の小さなオフスクリーンキャンバスを使い回す
 const scanCanvas = document.createElement('canvas');
 const scanCtx = scanCanvas.getContext('2d');
+
+// BarcodeDetector（iOS 17+ / Chrome）があれば使う。複数QRを同時検出できる
+const detector = ('BarcodeDetector' in window)
+  ? new BarcodeDetector({ formats: ['qr_code'] })
+  : null;
 
 function addTarget() {
   const val = document.getElementById('target-input').value.trim();
@@ -373,106 +377,113 @@ function stopCamera() {
   setStatus('停止しました', '');
 }
 
-function scanLoop() {
+async function scanLoop() {
   if (!stream) return;
   if (video.readyState === video.HAVE_ENOUGH_DATA) {
-
-    // canvas の内部サイズ = 表示サイズ（CSS px）に合わせる
     const dw = video.clientWidth, dh = video.clientHeight;
     if (overlayCanvas.width !== dw || overlayCanvas.height !== dh) {
       overlayCanvas.width = dw; overlayCanvas.height = dh;
     }
 
-    // object-fit:cover と同じクロップ領域をネイティブ解像度で計算
+    // object-fit:cover と同じクロップをスキャン用キャンバス（半サイズ）に適用
     const vw = video.videoWidth, vh = video.videoHeight;
     const scale = Math.max(dw / vw, dh / vh);
     const cropW = dw / scale, cropH = dh / scale;
     const cropX = (vw - cropW) / 2, cropY = (vh - cropH) / 2;
-
-    // クロップ済み映像をスキャン用キャンバス（半サイズ）に描画
     const sw = dw >> 1, sh = dh >> 1;
     if (scanCanvas.width !== sw || scanCanvas.height !== sh) {
       scanCanvas.width = sw; scanCanvas.height = sh;
     }
     scanCtx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, sw, sh);
-    const imgData = scanCtx.getImageData(0, 0, sw, sh);
-    // jsQR 座標は sw×sh 空間 → 2倍して dw×dh（表示）空間に変換
-    const rawCode = jsQR(imgData.data, sw, sh, { inversionAttempts: 'dontInvert' });
-    const code = rawCode ? scaledCode(rawCode, 2) : null;
-    ctx.clearRect(0, 0, dw, dh);
 
-    if (code) {
-      const isTarget = targets.size === 0 || targets.has(code.data);
-      drawQRHighlight(code.location, code.data, isTarget, dw);
-      if (isTarget && code.data !== lastFoundCode) {
-        lastFoundCode = code.data;
-        addHistory(code.data, true);
-        setStatus('発見！ → ' + code.data, 'found');
-        if (navigator.vibrate) navigator.vibrate([80, 40, 80]);
-      } else if (!isTarget) {
-        addHistory(code.data, false);
-        if (code.data !== lastFoundCode) setStatus('検出: ' + code.data + ' (対象外)', 'scanning');
+    // QRコード検出（複数対応）
+    let codes = [];
+    try {
+      if (detector) {
+        // BarcodeDetector: 複数QRを同時検出、座標は scanCanvas 空間
+        const results = await detector.detect(scanCanvas);
+        codes = results.map(r => ({
+          data: r.rawValue,
+          points: r.cornerPoints.map(p => ({ x: p.x * 2, y: p.y * 2 }))
+        }));
+      } else {
+        // jsQR フォールバック: 1件のみ
+        const imgData = scanCtx.getImageData(0, 0, sw, sh);
+        const raw = jsQR(imgData.data, sw, sh, { inversionAttempts: 'dontInvert' });
+        if (raw) {
+          const s = p => ({ x: p.x * 2, y: p.y * 2 });
+          codes = [{ data: raw.data, points: [
+            s(raw.location.topLeftCorner), s(raw.location.topRightCorner),
+            s(raw.location.bottomRightCorner), s(raw.location.bottomLeftCorner)
+          ]}];
+        }
       }
+    } catch(e) {}
+
+    ctx.clearRect(0, 0, dw, dh);
+    for (const code of codes) {
+      const isTarget = targets.size === 0 || targets.has(code.data);
+      drawHighlight(code.points, code.data, isTarget, dw);
+      addHistory(code.data, isTarget);
+    }
+
+    const foundTarget = codes.find(c => targets.size === 0 || targets.has(c.data));
+    if (foundTarget) {
+      if (foundTarget.data !== lastFoundCode) {
+        lastFoundCode = foundTarget.data;
+        setStatus('発見！ → ' + foundTarget.data, 'found');
+        if (navigator.vibrate) navigator.vibrate([80, 40, 80]);
+      } else {
+        setStatus('発見！ → ' + foundTarget.data, 'found');
+      }
+    } else if (codes.length > 0) {
+      lastFoundCode = null;
+      setStatus('検出: ' + codes.length + '件 (対象外)', 'scanning');
     } else {
       lastFoundCode = null;
-      if (stream && targets.size > 0) {
-        setStatus('スキャン中... ' + targets.size + '件の試薬を検索しています', 'scanning');
-      } else if (stream) {
-        setStatus('QRコードをスキャン中...', 'scanning');
-      }
+      setStatus(targets.size > 0
+        ? 'スキャン中... ' + targets.size + '件の試薬を検索しています'
+        : 'QRコードをスキャン中...', 'scanning');
     }
   }
   animId = setTimeout(scanLoop, SCAN_INTERVAL);
 }
 
-function scaledCode(code, scale) {
-  const s = p => ({ x: p.x * scale, y: p.y * scale });
-  return {
-    data: code.data,
-    location: {
-      topLeftCorner: s(code.location.topLeftCorner),
-      topRightCorner: s(code.location.topRightCorner),
-      bottomRightCorner: s(code.location.bottomRightCorner),
-      bottomLeftCorner: s(code.location.bottomLeftCorner),
-    }
-  };
-}
-
-function drawQRHighlight(loc, data, isTarget, w) {
+function drawHighlight(points, data, isTarget, w) {
   const c = ctx;
-  const tl = loc.topLeftCorner, tr = loc.topRightCorner;
-  const br = loc.bottomRightCorner, bl = loc.bottomLeftCorner;
+  const [tl, tr, br, bl] = points;
 
-  if (isTarget) {
-    c.fillStyle = 'rgba(29,158,117,0.2)';
-    c.beginPath();
-    c.moveTo(tl.x,tl.y); c.lineTo(tr.x,tr.y); c.lineTo(br.x,br.y); c.lineTo(bl.x,bl.y);
-    c.closePath(); c.fill();
-    c.strokeStyle = '#1D9E75'; c.lineWidth = Math.max(3, w*0.003);
-  } else {
-    c.strokeStyle = 'rgba(200,200,200,0.6)'; c.lineWidth = Math.max(1.5, w*0.002);
-  }
+  // 枠線
   c.beginPath();
   c.moveTo(tl.x,tl.y); c.lineTo(tr.x,tr.y); c.lineTo(br.x,br.y); c.lineTo(bl.x,bl.y);
-  c.closePath(); c.stroke();
-
+  c.closePath();
   if (isTarget) {
-    const cx = (tl.x + tr.x) / 2;
-    const cy = tl.y - w * 0.02;
-    const label = '✓ ' + data;
-    const fs = Math.max(14, w * 0.022);
-    c.font = `600 ${fs}px -apple-system,sans-serif`;
-    const tw = c.measureText(label).width;
-    const pad = 10, ph = fs * 1.4;
-    c.fillStyle = '#0F6E56';
-    roundRect(c, cx - tw/2 - pad, cy - ph*0.7, tw + pad*2, ph, 6);
+    c.fillStyle = 'rgba(29,158,117,0.2)';
     c.fill();
-    c.fillStyle = '#fff';
-    c.textAlign = 'center';
-    c.textBaseline = 'middle';
-    c.fillText(label, cx, cy);
-    c.textAlign = 'left'; c.textBaseline = 'alphabetic';
+    c.strokeStyle = '#1D9E75';
+    c.lineWidth = Math.max(3, w * 0.004);
+  } else {
+    c.strokeStyle = 'rgba(255,255,255,0.7)';
+    c.lineWidth = Math.max(1.5, w * 0.002);
   }
+  c.stroke();
+
+  // ラベル（全QRに表示）
+  const cx = (tl.x + tr.x) / 2;
+  const cy = tl.y - w * 0.015;
+  const label = (isTarget ? '✓ ' : '') + data;
+  const fs = Math.max(12, w * 0.02);
+  c.font = `600 ${fs}px -apple-system,sans-serif`;
+  const tw = c.measureText(label).width;
+  const pad = 8, ph = fs * 1.4;
+  c.fillStyle = isTarget ? '#0F6E56' : 'rgba(0,0,0,0.6)';
+  roundRect(c, cx - tw/2 - pad, cy - ph * 0.75, tw + pad * 2, ph, 5);
+  c.fill();
+  c.fillStyle = '#fff';
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillText(label, cx, cy - ph * 0.75 + ph / 2);
+  c.textAlign = 'left'; c.textBaseline = 'alphabetic';
 }
 
 function roundRect(ctx, x, y, w, h, r) {
