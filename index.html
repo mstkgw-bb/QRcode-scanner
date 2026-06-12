@@ -312,14 +312,15 @@
 
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script type="module">
-  // ZBar WASM を動的ロード（全バーコード同時検出）
   try {
-    const mod = await import('https://cdn.jsdelivr.net/npm/@undecaf/zbar-wasm@0.9.15/dist/main.js');
-    window.__zbar = mod;
-  } catch(e) {}
+    const { scanImageData } = await import('https://esm.sh/@undecaf/zbar-wasm');
+    window.__zbarScan = scanImageData;
+  } catch(e) {
+    window.__zbarError = String(e);
+  }
 </script>
 <script>
-const VERSION = 'v2.2';
+const VERSION = 'v2.3';
 document.getElementById('version-badge').textContent = VERSION;
 
 let stream = null, animId = null, renderAnimId = null;
@@ -458,11 +459,11 @@ async function scanLoop() {
     let usedMethod = '';
 
     // ① ZBar WASM: 1回のスキャンで全QRを同時検出
-    const zbar = window.__zbar;
-    if (zbar) {
+    const zbarScan = window.__zbarScan;
+    if (zbarScan) {
       try {
         const imgData = scanCtx.getImageData(0, 0, sw, sh);
-        const symbols = await zbar.scanImageData(imgData);
+        const symbols = await zbarScan(imgData);
         codes = symbols.map(s => ({
           data: s.decode(),
           points: s.points.map(p => ({ x: p.x * 2, y: p.y * 2 }))
@@ -473,29 +474,29 @@ async function scanLoop() {
       }
     }
 
-    // ② フォールバック: jsQR で5分割スキャン（最大5件）
-    if (!zbar || usedMethod === 'ZBar失敗') {
-      const regions = [
-        { x: 0,                 y: 0,                 w: sw,               h: sh               },
-        { x: 0,                 y: 0,                 w: Math.ceil(sw*.6), h: Math.ceil(sh*.6) },
-        { x: Math.floor(sw*.4), y: 0,                 w: Math.ceil(sw*.6), h: Math.ceil(sh*.6) },
-        { x: 0,                 y: Math.floor(sh*.4), w: Math.ceil(sw*.6), h: Math.ceil(sh*.6) },
-        { x: Math.floor(sw*.4), y: Math.floor(sh*.4), w: Math.ceil(sw*.6), h: Math.ceil(sh*.6) },
-      ];
+    // ② フォールバック: jsQR で 5×8=40 グリッドスキャン
+    if (!zbarScan || usedMethod === 'ZBar失敗') {
+      const COLS = 5, ROWS = 8;
+      const cw = Math.ceil(sw * 0.45), ch = Math.ceil(sh * 0.27);
       const found = new Map();
-      for (const r of regions) {
-        const imgData = scanCtx.getImageData(r.x, r.y, r.w, r.h);
-        const raw = jsQR(imgData.data, r.w, r.h, { inversionAttempts: 'dontInvert' });
-        if (raw && !found.has(raw.data)) {
-          const s = p => ({ x: (p.x + r.x) * 2, y: (p.y + r.y) * 2 });
-          found.set(raw.data, { data: raw.data, points: [
-            s(raw.location.topLeftCorner), s(raw.location.topRightCorner),
-            s(raw.location.bottomRightCorner), s(raw.location.bottomLeftCorner)
-          ]});
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          const x = Math.round(c * (sw - cw) / (COLS - 1));
+          const y = Math.round(r * (sh - ch) / (ROWS - 1));
+          const imgData = scanCtx.getImageData(x, y, cw, ch);
+          const raw = jsQR(imgData.data, cw, ch, { inversionAttempts: 'dontInvert' });
+          if (raw && !found.has(raw.data)) {
+            const s = p => ({ x: (p.x + x) * 2, y: (p.y + y) * 2 });
+            found.set(raw.data, { data: raw.data, points: [
+              s(raw.location.topLeftCorner), s(raw.location.topRightCorner),
+              s(raw.location.bottomRightCorner), s(raw.location.bottomLeftCorner)
+            ]});
+          }
         }
       }
       codes = Array.from(found.values());
-      usedMethod = zbar ? 'ZBar失敗→jsQR' : (window.__zbar === undefined ? 'ZBar読込中...' : 'jsQR(最大5件)');
+      const errInfo = window.__zbarError ? 'ZBarエラー' : (window.__zbarScan === undefined ? 'ZBar読込中...' : 'ZBar失敗');
+      usedMethod = zbarScan ? 'ZBar失敗→jsQR40' : errInfo + `→jsQR40 (${codes.length}件)`;
     }
 
     document.getElementById('fs-frame-count').textContent = `このフレーム: ${codes.length}件`;
