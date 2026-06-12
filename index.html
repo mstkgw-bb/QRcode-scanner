@@ -321,8 +321,15 @@
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script type="module">
+  // ZBar WASM を動的ロード（全バーコード同時検出）
+  try {
+    const mod = await import('https://cdn.jsdelivr.net/npm/@undecaf/zbar-wasm@0.9.15/dist/main.js');
+    window.__zbar = mod;
+  } catch(e) {}
+</script>
 <script>
-const VERSION = 'v1.9';
+const VERSION = 'v2.0';
 document.getElementById('version-badge').textContent = VERSION;
 
 let stream = null, animId = null;
@@ -440,26 +447,26 @@ async function scanLoop() {
     scanCtx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, sw, sh);
 
     let codes = [];
-    let usedMethod = 'jsQR';
+    let usedMethod = '';
 
-    // BarcodeDetector: createImageBitmap でクロップ済み静止フレームを渡す
-    if (detector) {
+    // ① ZBar WASM: 1回のスキャンで全QRを同時検出
+    const zbar = window.__zbar;
+    if (zbar) {
       try {
-        const bitmap = await createImageBitmap(video, cropX, cropY, cropW, cropH);
-        const results = await detector.detect(bitmap);
-        bitmap.close();
-        usedMethod = 'BarcodeDetector';
-        codes = results.map(r => ({
-          data: r.rawValue,
-          points: r.cornerPoints.map(p => ({ x: p.x * scale, y: p.y * scale }))
+        const imgData = scanCtx.getImageData(0, 0, sw, sh);
+        const symbols = await zbar.scanImageData(imgData);
+        codes = symbols.map(s => ({
+          data: s.decode(),
+          points: s.points.map(p => ({ x: p.x * 2, y: p.y * 2 }))
         }));
+        usedMethod = `ZBar (${codes.length}件)`;
       } catch(e) {
-        usedMethod = 'jsQR(BD失敗)';
+        usedMethod = 'ZBar失敗';
       }
     }
 
-    // フォールバック: jsQR で5分割スキャン
-    if (usedMethod !== 'BarcodeDetector') {
+    // ② フォールバック: jsQR で5分割スキャン（最大5件）
+    if (!zbar || usedMethod === 'ZBar失敗') {
       const regions = [
         { x: 0,                 y: 0,                 w: sw,               h: sh               },
         { x: 0,                 y: 0,                 w: Math.ceil(sw*.6), h: Math.ceil(sh*.6) },
@@ -480,11 +487,11 @@ async function scanLoop() {
         }
       }
       codes = Array.from(found.values());
+      usedMethod = zbar ? 'ZBar失敗→jsQR' : (window.__zbar === undefined ? 'ZBar読込中...' : 'jsQR(最大5件)');
     }
 
-    // フレーム毎の診断表示
     document.getElementById('fs-frame-count').textContent = `このフレーム: ${codes.length}件`;
-    document.getElementById('fs-mode').textContent = detector ? usedMethod : 'jsQR (iOS17+で多件対応)';
+    document.getElementById('fs-mode').textContent = usedMethod;
 
     ctx.clearRect(0, 0, dw, dh);
     for (const code of codes) {
