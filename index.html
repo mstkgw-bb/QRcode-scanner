@@ -163,20 +163,28 @@
   #fs-counter{
     pointer-events:none;
     position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-    display:flex;flex-direction:column;align-items:center;gap:4px;
+    display:flex;flex-direction:column;align-items:center;gap:6px;
     opacity:0;transition:opacity .3s;
   }
   #cam-wrap.fullscreen #fs-counter{opacity:1}
   #fs-count-num{
-    font-size:72px;font-weight:700;color:#fff;line-height:1;
-    text-shadow:0 2px 20px rgba(0,0,0,0.5);
+    font-size:80px;font-weight:700;color:#fff;line-height:1;
+    text-shadow:0 2px 24px rgba(0,0,0,0.6);
     font-variant-numeric:tabular-nums;
   }
   #fs-count-num.found{color:#4DEDA0}
   #fs-count-label{
-    font-size:14px;color:rgba(255,255,255,0.8);
-    background:rgba(0,0,0,0.4);border-radius:20px;
-    padding:4px 12px;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+    font-size:14px;color:rgba(255,255,255,0.85);
+    background:rgba(0,0,0,0.45);border-radius:20px;
+    padding:4px 14px;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  }
+  #fs-frame-count{
+    font-size:12px;color:rgba(255,255,255,0.55);
+    background:rgba(0,0,0,0.3);border-radius:12px;
+    padding:3px 10px;
+  }
+  #fs-mode{
+    font-size:11px;color:rgba(255,255,255,0.45);letter-spacing:.3px;
   }
 
   #fs-status{
@@ -272,6 +280,8 @@
         <div id="fs-counter">
           <div id="fs-count-num">0</div>
           <div id="fs-count-label">件スキャン済み</div>
+          <div id="fs-frame-count">このフレーム: 0件</div>
+          <div id="fs-mode">-</div>
         </div>
         <div id="fs-btns">
           <button id="fs-stop-btn" onclick="stopCamera()">
@@ -312,7 +322,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script>
-const VERSION = 'v1.8';
+const VERSION = 'v1.9';
 document.getElementById('version-badge').textContent = VERSION;
 
 let stream = null, animId = null;
@@ -430,6 +440,7 @@ async function scanLoop() {
     scanCtx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, sw, sh);
 
     let codes = [];
+    let usedMethod = 'jsQR';
 
     // BarcodeDetector: createImageBitmap でクロップ済み静止フレームを渡す
     if (detector) {
@@ -437,24 +448,24 @@ async function scanLoop() {
         const bitmap = await createImageBitmap(video, cropX, cropY, cropW, cropH);
         const results = await detector.detect(bitmap);
         bitmap.close();
-        if (results.length > 0) {
-          codes = results.map(r => ({
-            data: r.rawValue,
-            // bitmap 座標（cropW×cropH）→ 表示座標（dw×dh）
-            points: r.cornerPoints.map(p => ({ x: p.x * scale, y: p.y * scale }))
-          }));
-        }
-      } catch(e) {}
+        usedMethod = 'BarcodeDetector';
+        codes = results.map(r => ({
+          data: r.rawValue,
+          points: r.cornerPoints.map(p => ({ x: p.x * scale, y: p.y * scale }))
+        }));
+      } catch(e) {
+        usedMethod = 'jsQR(BD失敗)';
+      }
     }
 
     // フォールバック: jsQR で5分割スキャン
-    if (codes.length === 0) {
+    if (usedMethod !== 'BarcodeDetector') {
       const regions = [
-        { x: 0,                   y: 0,                   w: sw,              h: sh               },
-        { x: 0,                   y: 0,                   w: Math.ceil(sw*.6), h: Math.ceil(sh*.6) },
-        { x: Math.floor(sw*.4),   y: 0,                   w: Math.ceil(sw*.6), h: Math.ceil(sh*.6) },
-        { x: 0,                   y: Math.floor(sh*.4),   w: Math.ceil(sw*.6), h: Math.ceil(sh*.6) },
-        { x: Math.floor(sw*.4),   y: Math.floor(sh*.4),   w: Math.ceil(sw*.6), h: Math.ceil(sh*.6) },
+        { x: 0,                 y: 0,                 w: sw,               h: sh               },
+        { x: 0,                 y: 0,                 w: Math.ceil(sw*.6), h: Math.ceil(sh*.6) },
+        { x: Math.floor(sw*.4), y: 0,                 w: Math.ceil(sw*.6), h: Math.ceil(sh*.6) },
+        { x: 0,                 y: Math.floor(sh*.4), w: Math.ceil(sw*.6), h: Math.ceil(sh*.6) },
+        { x: Math.floor(sw*.4), y: Math.floor(sh*.4), w: Math.ceil(sw*.6), h: Math.ceil(sh*.6) },
       ];
       const found = new Map();
       for (const r of regions) {
@@ -470,6 +481,10 @@ async function scanLoop() {
       }
       codes = Array.from(found.values());
     }
+
+    // フレーム毎の診断表示
+    document.getElementById('fs-frame-count').textContent = `このフレーム: ${codes.length}件`;
+    document.getElementById('fs-mode').textContent = detector ? usedMethod : 'jsQR (iOS17+で多件対応)';
 
     ctx.clearRect(0, 0, dw, dh);
     for (const code of codes) {
