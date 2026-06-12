@@ -133,17 +133,7 @@
     position:absolute;inset:0;pointer-events:none;
     display:flex;align-items:center;justify-content:center;
   }
-  .guide-frame{
-    width:55%;max-width:200px;aspect-ratio:1;
-    border:2px solid rgba(255,255,255,0.3);border-radius:12px;
-    box-shadow:0 0 0 2000px rgba(0,0,0,0.35);
-    position:relative;
-  }
-  .guide-corner{position:absolute;width:18px;height:18px;border-color:#fff;border-style:solid}
-  .guide-corner.tl{top:-2px;left:-2px;border-width:3px 0 0 3px;border-radius:4px 0 0 0}
-  .guide-corner.tr{top:-2px;right:-2px;border-width:3px 3px 0 0;border-radius:0 4px 0 0}
-  .guide-corner.bl{bottom:-2px;left:-2px;border-width:0 0 3px 3px;border-radius:0 0 0 4px}
-  .guide-corner.br{bottom:-2px;right:-2px;border-width:0 3px 3px 0;border-radius:0 0 4px 0}
+  .guide-frame{display:none}
 
   /* ── フルスクリーンカメラ ── */
   #cam-wrap.fullscreen{
@@ -329,7 +319,7 @@
   } catch(e) {}
 </script>
 <script>
-const VERSION = 'v2.0';
+const VERSION = 'v2.1';
 document.getElementById('version-badge').textContent = VERSION;
 
 let stream = null, animId = null;
