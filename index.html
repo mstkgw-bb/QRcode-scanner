@@ -319,25 +319,24 @@
   } catch(e) {}
 </script>
 <script>
-const VERSION = 'v2.1';
+const VERSION = 'v2.2';
 document.getElementById('version-badge').textContent = VERSION;
 
-let stream = null, animId = null;
+let stream = null, animId = null, renderAnimId = null;
 let targets = new Set();
 let history = new Map();
 let lastFoundCode = null;
 const SCAN_INTERVAL = 250;
+const PERSIST_MS = 1500; // 検出後この時間フレームを表示し続ける
+
+// AR用: 検出済みコードの最終位置を保持
+const persistent = new Map(); // data → {points, lastSeen, isTarget}
 
 const video = document.getElementById('video');
 const overlayCanvas = document.getElementById('overlay');
 const ctx = overlayCanvas.getContext('2d');
 const scanCanvas = document.createElement('canvas');
 const scanCtx = scanCanvas.getContext('2d');
-
-// BarcodeDetector（iOS 17+ / Chrome）があれば使う。複数QRを同時検出できる
-const detector = ('BarcodeDetector' in window)
-  ? new BarcodeDetector({ formats: ['qr_code'] })
-  : null;
 
 function addTarget() {
   const val = document.getElementById('target-input').value.trim();
@@ -373,6 +372,7 @@ function renderTargets() {
 function clearAll() {
   targets.clear();
   history.clear();
+  persistent.clear();
   lastFoundCode = null;
   renderTargets();
   renderHistory();
@@ -395,7 +395,8 @@ async function startCamera() {
     document.getElementById('cam-wrap').classList.add('fullscreen');
     document.body.classList.add('cam-open');
     setStatus(targets.size > 0 ? 'スキャン中... ' + targets.size + '件の試薬を検索しています' : 'QRコードをスキャン中...', 'scanning');
-    scanLoop();
+    renderLoop(); // 60fps 描画ループ開始
+    scanLoop();   // 検出ループ開始
   } catch(e) {
     setStatus('カメラへのアクセスが許可されていません', '');
     document.getElementById('cam-placeholder').innerHTML = '<svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.4"><path d="M1 1l22 22M17 17H3a2 2 0 0 1-2-2V7m5-3h9l2 3h3a2 2 0 0 1 2 2v9.34"/><circle cx="12" cy="12" r="4"/></svg><p style="font-size:13px">カメラのアクセスを許可してください</p>';
@@ -406,6 +407,8 @@ async function startCamera() {
 function stopCamera() {
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
   clearTimeout(animId);
+  cancelAnimationFrame(renderAnimId);
+  persistent.clear();
   video.srcObject = null;
   ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
   document.getElementById('cam-placeholder').style.display = 'flex';
@@ -415,6 +418,21 @@ function stopCamera() {
   document.getElementById('cam-wrap').classList.remove('fullscreen');
   document.body.classList.remove('cam-open');
   setStatus('停止しました', '');
+}
+
+// 60fps 描画ループ（検出位置を滑らかに表示）
+function renderLoop() {
+  const dw = overlayCanvas.width, dh = overlayCanvas.height;
+  ctx.clearRect(0, 0, dw, dh);
+  const now = Date.now();
+  for (const [data, entry] of persistent) {
+    const age = now - entry.lastSeen;
+    if (age > PERSIST_MS) { persistent.delete(data); continue; }
+    // 最後の 30% でフェードアウト
+    const alpha = age < PERSIST_MS * 0.7 ? 1 : 1 - (age - PERSIST_MS * 0.7) / (PERSIST_MS * 0.3);
+    drawHighlight(entry.points, data, entry.isTarget, dw, alpha);
+  }
+  renderAnimId = requestAnimationFrame(renderLoop);
 }
 
 async function scanLoop() {
@@ -483,10 +501,11 @@ async function scanLoop() {
     document.getElementById('fs-frame-count').textContent = `このフレーム: ${codes.length}件`;
     document.getElementById('fs-mode').textContent = usedMethod;
 
-    ctx.clearRect(0, 0, dw, dh);
+    // persistent を更新（描画は renderLoop が担当）
+    const now = Date.now();
     for (const code of codes) {
       const isTarget = targets.size === 0 || targets.has(code.data);
-      drawHighlight(code.points, code.data, isTarget, dw);
+      persistent.set(code.data, { points: code.points, lastSeen: now, isTarget });
       addHistory(code.data, isTarget);
     }
 
@@ -512,8 +531,9 @@ async function scanLoop() {
   animId = setTimeout(scanLoop, SCAN_INTERVAL);
 }
 
-function drawHighlight(points, data, isTarget, w) {
+function drawHighlight(points, data, isTarget, w, alpha = 1) {
   const c = ctx;
+  c.globalAlpha = alpha;
   const [tl, tr, br, bl] = points;
 
   // 枠線
@@ -547,6 +567,7 @@ function drawHighlight(points, data, isTarget, w) {
   c.textBaseline = 'middle';
   c.fillText(label, cx, cy - ph * 0.75 + ph / 2);
   c.textAlign = 'left'; c.textBaseline = 'alphabetic';
+  c.globalAlpha = 1;
 }
 
 function roundRect(ctx, x, y, w, h, r) {
